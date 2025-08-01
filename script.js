@@ -347,11 +347,12 @@ function addLocationMarkers() {
             icon: createCustomMarker(location)
         }).addTo(map);
         
+        const accurateImageUrl = getAccurateImageUrl(location);
         const popupContent = `
             <div class="popup-content">
                 <h4>${customIcons[location.type].icon} ${location.name}</h4>
                 <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
-                ${location.image ? `<img src="${location.image}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;">` : ''}
+                <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
                 <p>${currentLanguage === 'zh' ? '湖滨豪华度假村，设施齐全，景色优美' : 'Luxury lakefront resort with full amenities and stunning views'}</p>
                 ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
             </div>
@@ -369,12 +370,13 @@ function addLocationMarkers() {
         
         const originalDescription = originalData ? originalData.attractions[key].description : location.description;
         const description = getTranslatedDescription(originalDescription) || getAttractionDescription(location.name);
+        const accurateImageUrl = getAccurateImageUrl(location);
         
         const popupContent = `
             <div class="popup-content">
                 <h4>${customIcons[location.type].icon} ${location.name}</h4>
                 <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
-                ${location.image ? `<img src="${location.image}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;">` : ''}
+                <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
                 <p>${description}</p>
                 ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
             </div>
@@ -841,6 +843,34 @@ function getTranslatedDescription(originalDescription) {
         return translations.zh.descriptions[originalDescription] || originalDescription;
     }
     return originalDescription;
+}
+
+// 生成真实准确的图片URL - 使用图片搜索引擎
+function getAccurateImageUrl(location) {
+    // 构建精确的搜索关键词 - 包含地点名称和省份/地区
+    let searchTerm = location.name;
+    
+    // 为特定地点添加地理位置信息以提高搜索准确性
+    if (location.name.includes('Provincial Park') || location.name.includes('Park')) {
+        searchTerm += ' British Columbia Canada';
+    } else if (location.name.includes('Winery') || location.name.includes('Vineyards')) {
+        searchTerm += ' Okanagan Valley BC';
+    } else if (location.name.includes('Beach') || location.name.includes('Lake')) {
+        searchTerm += ' Okanagan BC Canada';
+    } else if (location.name.includes('Museum') || location.name.includes('Centre')) {
+        searchTerm += ' British Columbia';
+    } else {
+        // 为城市和一般景点添加BC省信息
+        searchTerm += ' BC Canada';
+    }
+    
+    // 使用 DuckDuckGo 图片搜索 - 返回第一个结果的URL
+    // 这种方法生成指向真实搜索结果的链接
+    const encodedSearch = encodeURIComponent(searchTerm);
+    
+    // 使用 Bing 图片搜索 API 格式 - 更稳定可靠
+    // 构造一个指向真实搜索结果的URL，会显示该地点的实际照片
+    return `https://tse1.mm.bing.net/th?q=${encodedSearch}&w=400&h=250&c=7&rs=1&o=5&pid=1.7`;
 }
 
 // 页面加载时立即初始化为中文
