@@ -347,7 +347,8 @@ function addLocationMarkers() {
             icon: createCustomMarker(location)
         }).addTo(map);
         
-        const accurateImageUrl = getAccurateImageUrl(location);
+        const originalName = originalData ? Object.values(originalData.hotels).find(h => h.lat === location.lat && h.lng === location.lng)?.name : null;
+        const accurateImageUrl = getAccurateImageUrl(location, originalName);
         const popupContent = `
             <div class="popup-content">
                 <h4>${customIcons[location.type].icon} ${location.name}</h4>
@@ -370,7 +371,8 @@ function addLocationMarkers() {
         
         const originalDescription = originalData ? originalData.attractions[key].description : location.description;
         const description = getTranslatedDescription(originalDescription) || getAttractionDescription(location.name);
-        const accurateImageUrl = getAccurateImageUrl(location);
+        const originalName = originalData ? originalData.attractions[key].name : null;
+        const accurateImageUrl = getAccurateImageUrl(location, originalName);
         
         const popupContent = `
             <div class="popup-content">
@@ -846,26 +848,32 @@ function getTranslatedDescription(originalDescription) {
 }
 
 // 生成真实准确的图片URL - 使用图片搜索引擎
-function getAccurateImageUrl(location) {
-    // 构建精确的搜索关键词 - 包含地点名称和省份/地区
-    let searchTerm = location.name;
+function getAccurateImageUrl(location, originalName = null) {
+    // 构建精确的搜索关键词 - 使用原始英文名称确保图片准确
+    let searchTerm = originalName || location.name;
     
-    // 为特定地点添加地理位置信息以提高搜索准确性
-    if (location.name.includes('Provincial Park') || location.name.includes('Park')) {
+    // 为特定地点添加地理位置信息以提高搜索准确性 - 使用原始英文名称进行关键词匹配
+    const nameForMatching = originalName || location.name;
+    if (nameForMatching.includes('Provincial Park') || nameForMatching.includes('Park')) {
         searchTerm += ' British Columbia Canada';
-    } else if (location.name.includes('Winery') || location.name.includes('Vineyards')) {
-        searchTerm += ' Okanagan Valley BC';
-    } else if (location.name.includes('Beach') || location.name.includes('Lake')) {
-        searchTerm += ' Okanagan BC Canada';
-    } else if (location.name.includes('Museum') || location.name.includes('Centre')) {
-        searchTerm += ' British Columbia';
+    } else if (nameForMatching.includes('Winery') || nameForMatching.includes('Vineyards') || nameForMatching.includes('Cellars')) {
+        searchTerm += ' Okanagan Valley BC winery';
+    } else if (nameForMatching.includes('Beach') || nameForMatching.includes('Lake')) {
+        searchTerm += ' Okanagan BC Canada lake beach';
+    } else if (nameForMatching.includes('Museum') || nameForMatching.includes('Centre') || nameForMatching.includes('Center')) {
+        searchTerm += ' British Columbia Canada';
+    } else if (nameForMatching.includes('Falls') || nameForMatching.includes('Waterfall')) {
+        searchTerm += ' British Columbia Canada waterfall';
+    } else if (nameForMatching.includes('Mountain') || nameForMatching.includes('Trail') || nameForMatching.includes('Hiking')) {
+        searchTerm += ' British Columbia Canada hiking trail mountain';
+    } else if (nameForMatching.includes('Hot Springs')) {
+        searchTerm += ' British Columbia Canada hot springs resort';
     } else {
         // 为城市和一般景点添加BC省信息
         searchTerm += ' BC Canada';
     }
     
-    // 使用 DuckDuckGo 图片搜索 - 返回第一个结果的URL
-    // 这种方法生成指向真实搜索结果的链接
+    // 使用 Bing 图片搜索 - 可靠的图片来源
     const encodedSearch = encodeURIComponent(searchTerm);
     
     // 使用 Bing 图片搜索 API 格式 - 更稳定可靠
