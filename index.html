@@ -33,6 +33,19 @@
                 🍷 奥肯纳根旅游指南 🏔️
             </h1>
             <p class="subtitle">从本拿比到奥卡纳根湖区 • 热门景点与驾车路线指南</p>
+            
+            <!-- 过滤器按钮 -->
+            <div class="filter-controls">
+                <button id="filterAll" class="filter-btn active" onclick="filterMarkers('all')">
+                    <i class="fas fa-map-marker-alt"></i> <span class="filter-text">全部</span>
+                </button>
+                <button id="filterLandmarks" class="filter-btn" onclick="filterMarkers('landmarks')">
+                    <i class="fas fa-mountain"></i> <span class="filter-text">景点</span>
+                </button>
+                <button id="filterDining" class="filter-btn" onclick="filterMarkers('dining')">
+                    <i class="fas fa-utensils"></i> <span class="filter-text">美食</span>
+                </button>
+            </div>
         </div>
     </header>
 

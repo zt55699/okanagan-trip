@@ -3,6 +3,172 @@ let map;
 let routeControl;
 let markers = [];
 
+// 路线缓存系统
+const routeCache = {
+    storage: new Map(),
+    localStoragePrefix: 'okanagan_route_',
+    
+    // 生成路线缓存键
+    generateKey: function(waypoints) {
+        return waypoints.map(wp => `${wp.lat.toFixed(4)},${wp.lng.toFixed(4)}`).join('|');
+    },
+    
+    // 从localStorage加载缓存
+    loadFromLocalStorage: function() {
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(this.localStoragePrefix)) {
+                    const routeKey = key.substring(this.localStoragePrefix.length);
+                    const data = JSON.parse(localStorage.getItem(key));
+                    if (data && Date.now() - data.timestamp < 24 * 60 * 60 * 1000) {
+                        this.storage.set(routeKey, data);
+                    } else {
+                        localStorage.removeItem(key); // 清理过期数据
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to load route cache from localStorage:', e);
+        }
+    },
+    
+    // 获取缓存的路线
+    get: function(waypoints) {
+        const key = this.generateKey(waypoints);
+        let cached = this.storage.get(key);
+        
+        // 如果内存中没有，尝试从localStorage获取
+        if (!cached) {
+            try {
+                const localData = localStorage.getItem(this.localStoragePrefix + key);
+                if (localData) {
+                    cached = JSON.parse(localData);
+                    if (cached && Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) {
+                        this.storage.set(key, cached);
+                    } else {
+                        localStorage.removeItem(this.localStoragePrefix + key);
+                        return null;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to get cached route from localStorage:', e);
+            }
+        }
+        
+        if (cached && Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) { // 24小时缓存
+            console.log('Using cached route data');
+            return cached.data;
+        }
+        return null;
+    },
+    
+    // 存储路线到缓存
+    set: function(waypoints, routeData) {
+        const key = this.generateKey(waypoints);
+        const cacheData = {
+            data: routeData,
+            timestamp: Date.now()
+        };
+        
+        // 存储到内存
+        this.storage.set(key, cacheData);
+        
+        // 存储到localStorage
+        try {
+            localStorage.setItem(this.localStoragePrefix + key, JSON.stringify(cacheData));
+            console.log('Route data cached to memory and localStorage');
+        } catch (e) {
+            console.warn('Failed to cache route to localStorage:', e);
+            console.log('Route data cached to memory only');
+        }
+    },
+    
+    // 清理过期缓存
+    cleanup: function() {
+        const now = Date.now();
+        const expiredKeys = [];
+        
+        // 清理内存缓存
+        this.storage.forEach((value, key) => {
+            if (now - value.timestamp > 24 * 60 * 60 * 1000) {
+                expiredKeys.push(key);
+            }
+        });
+        expiredKeys.forEach(key => this.storage.delete(key));
+        
+        // 清理localStorage缓存
+        try {
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith(this.localStoragePrefix)) {
+                    const data = JSON.parse(localStorage.getItem(key));
+                    if (!data || now - data.timestamp > 24 * 60 * 60 * 1000) {
+                        keysToRemove.push(key);
+                    }
+                }
+            }
+            keysToRemove.forEach(key => localStorage.removeItem(key));
+        } catch (e) {
+            console.warn('Failed to cleanup localStorage cache:', e);
+        }
+    },
+    
+    // 初始化缓存
+    init: function() {
+        this.loadFromLocalStorage();
+        this.cleanup();
+    }
+};
+
+// 创建后备路线（简单直线连接）
+function createFallbackRoute(waypoints) {
+    const coordinates = waypoints.map(wp => [wp.lng, wp.lat]);
+    
+    return {
+        name: 'Fallback Route',
+        coordinates: coordinates,
+        instructions: waypoints.map((wp, index) => ({
+            type: 'Straight',
+            modifier: null,
+            text: index === 0 ? 'Start' : index === waypoints.length - 1 ? 'Arrive at destination' : `Continue to waypoint ${index + 1}`,
+            distance: index < waypoints.length - 1 ? calculateDistance(waypoints[index], waypoints[index + 1]) : 0,
+            time: index < waypoints.length - 1 ? calculateDistance(waypoints[index], waypoints[index + 1]) / 50 * 3600 : 0 // 假设50km/h平均速度
+        })),
+        summary: {
+            totalDistance: waypoints.reduce((total, wp, index) => {
+                if (index < waypoints.length - 1) {
+                    return total + calculateDistance(wp, waypoints[index + 1]);
+                }
+                return total;
+            }, 0),
+            totalTime: waypoints.reduce((total, wp, index) => {
+                if (index < waypoints.length - 1) {
+                    return total + calculateDistance(wp, waypoints[index + 1]) / 50 * 3600;
+                }
+                return total;
+            }, 0)
+        }
+    };
+}
+
+// 计算两点之间的距离（米）
+function calculateDistance(point1, point2) {
+    const R = 6371000; // 地球半径（米）
+    const lat1Rad = point1.lat * Math.PI / 180;
+    const lat2Rad = point2.lat * Math.PI / 180;
+    const deltaLatRad = (point2.lat - point1.lat) * Math.PI / 180;
+    const deltaLngRad = (point2.lng - point1.lng) * Math.PI / 180;
+
+    const a = Math.sin(deltaLatRad / 2) * Math.sin(deltaLatRad / 2) +
+        Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+        Math.sin(deltaLngRad / 2) * Math.sin(deltaLngRad / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+}
+
 // 主要住宿地点 (corrected coordinates and added photos/links)
 const hotels = {
     deltaHotel: { 
@@ -26,12 +192,12 @@ const hotels = {
 // 热门景点
 const attractions = {
     // Highway 5 (Coquihalla) attractions
-    othelloTunnels: { lat: 49.3688, lng: -121.3678, name: "Othello Tunnels", type: "hiking", description: "Historic railway tunnels through dramatic canyon walls, part of Kettle Valley Railway", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/coquihalla/othello-tunnels.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/coquihalla/" },
+    othelloTunnels: { lat: 49.3688, lng: -121.3678, name: "Othello Tunnels", type: "hiking", description: "Historic railway tunnels through dramatic canyon walls, part of Kettle Valley Railway", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/coquihalla/othello-tunnels.jpg?w=400&h=250", link: "https://bcparks.ca/coquihalla-canyon-park/" },
     coquihallaCanyon: { lat: 49.3858, lng: -121.4424, name: "Coquihalla Canyon Provincial Park", type: "hiking", description: "Former Kettle Valley Railway route with tunnels and trestles, spectacular canyon views near Hope", image: "https://bcparks.ca/wp-content/uploads/2020/03/coquihalla-canyon-tunnels.jpg?w=400&h=250", link: "https://bcparks.ca/coquihalla-canyon-park/" },
     brittonCreekRestArea: { lat: 49.651870, lng: -121.000690, name: "Britton Creek Rest Area", type: "scenic", description: "Highway 5 rest stop with washroom facilities, picnic tables, and mountain views near Coquihalla Summit", image: "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=250", link: "https://www.th.gov.bc.ca/restareas/" },
-    zopkiosRestArea: { lat: 49.680000, lng: -120.950000, name: "Zopkios Rest Area", type: "scenic", description: "Rest area near Coquihalla Summit with mountain views and hiking opportunities", image: "https://images.unsplash.com/photo-1551632811-561732d1e306?w=400&h=250", link: "https://www.th.gov.bc.ca/restareas/" },
-    fallsLakeTrail: { lat: 49.620000, lng: -121.020000, name: "Falls Lake Trail", type: "hiking", description: "1.5km alpine lake trail with impressive mountain views, 45km north of Hope near Coquihalla Summit", image: "https://bcparks.ca/wp-content/uploads/2020/03/falls-lake-trail.jpg?w=400&h=250", link: "https://bcparks.ca/falls-lake-recreation-area/" },
-    coquihallaSummit: { lat: 49.685000, lng: -120.940000, name: "Coquihalla Summit", type: "scenic", description: "Highest point on Highway 5 at 1,244m elevation with mountain views and alpine environment", image: "https://images.unsplash.com/photo-1464822759844-d150ad6c0ce8?w=400&h=250", link: "https://www.drivebc.ca/" },
+    zopkiosRestArea: { lat: 49.5958, lng: -121.1224, name: "Zopkios Rest Area", type: "scenic", description: "Rest area near Coquihalla Summit with mountain views and hiking opportunities", image: "https://images.unsplash.com/photo-1551632811-561732d1e306?w=400&h=250", link: "https://www.th.gov.bc.ca/restareas/" },
+    fallsLakeTrail: { lat: 49.612702, lng: -121.065052, name: "Falls Lake Trail", type: "hiking", description: "1.5km alpine lake trail with impressive mountain views, 45km north of Hope near Coquihalla Summit", image: "https://bcparks.ca/wp-content/uploads/2020/03/falls-lake-trail.jpg?w=400&h=250", link: "https://bcparks.ca/coquihalla-summit-recreation-area/" },
+    coquihallaSummit: { lat: 49.6000, lng: -121.0500, name: "Coquihalla Summit", type: "scenic", description: "Highest point on Highway 5 at 1,244m elevation with mountain views and alpine environment", image: "https://images.unsplash.com/photo-1464822759844-d150ad6c0ce8?w=400&h=250", link: "https://www.drivebc.ca/" },
     
     // Highway 5A Merritt to Kamloops attractions
     nicolaLake: { lat: 50.130000, lng: -120.850000, name: "Nicola Lake", type: "scenic", description: "Large scenic lake just outside Merritt with over 20 fish species including Kokanee and Rainbow Trout", image: "https://www.tourismkamloops.com/wp-content/uploads/2020/06/nicola-lake.jpg?w=400&h=250", link: "https://www.tourismkamloops.com/" },
@@ -52,10 +218,10 @@ const attractions = {
     petersonCreekPark: { lat: 50.677, lng: -120.334, name: "Peterson Creek Nature Park", type: "hiking", description: "100 hectares in heart of Kamloops with 10km of varied trails", image: "https://www.kamloops.ca/sites/default/files/styles/header_image/public/peterson-creek-trails.jpg?w=400&h=250", link: "https://www.kamloops.ca/parks-recreation/parks-trails/peterson-creek-nature-park" },
     
     // Kelowna area
-    myraCanyon: { lat: 49.7684, lng: -119.3146, name: "Myra Canyon Trestles", type: "hiking", description: "Historic Kettle Valley Railway trail with 18 trestle bridges and 2 tunnels", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/myra_canyon/myra-canyon-trestle.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/myra_canyon/" },
+    myraCanyon: { lat: 49.7684, lng: -119.3146, name: "Myra Canyon Trestles", type: "hiking", description: "Historic Kettle Valley Railway trail with 18 trestle bridges and 2 tunnels", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/myra_canyon/myra-canyon-trestle.jpg?w=400&h=250", link: "https://bcparks.ca/kettle-valley-rail-trail/" },
     knoxMountain: { lat: 49.904440, lng: -119.492740, name: "Knox Mountain Park", type: "hiking", description: "Kelowna's largest natural park with 15 trails and panoramic lake views", image: "https://www.kelowna.ca/sites/default/files/styles/banner_image/public/knox-mountain-view.jpg?w=400&h=250", link: "https://www.kelowna.ca/parks-recreation/parks-beaches/knox-mountain-park" },
-    okanaganMountainPark: { lat: 49.6666, lng: -119.4166, name: "Okanagan Mountain Provincial Park", type: "hiking", description: "10,000 hectares of rugged terrain with scenic views of Okanagan Lake", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/okan_mtn/okanagan-mountain-park.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/okan_mtn/" },
-    bearCreek: { lat: 49.9250, lng: -119.5192, name: "Bear Creek Provincial Park", type: "beach", description: "400-metre sandy beach, BC's second most popular camping destination", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bear_crk/bear-creek-beach.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bear_crk/" },
+    okanaganMountainPark: { lat: 49.6666, lng: -119.4166, name: "Okanagan Mountain Provincial Park", type: "hiking", description: "10,000 hectares of rugged terrain with scenic views of Okanagan Lake", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/okan_mtn/okanagan-mountain-park.jpg?w=400&h=250", link: "https://bcparks.ca/okanagan-mountain-park/" },
+    bearCreek: { lat: 49.9250, lng: -119.5192, name: "Bear Creek Provincial Park", type: "beach", description: "400-metre sandy beach, BC's second most popular camping destination", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bear_crk/bear-creek-beach.jpg?w=400&h=250", link: "https://bcparks.ca/bear-creek-park/" },
     kelownaWaterfront: { lat: 49.8863, lng: -119.4967, name: "Kelowna Waterfront Park", type: "waterfront", description: "Downtown lakefront park with beaches, sculptures, and cultural district", image: "https://www.kelowna.ca/sites/default/files/styles/banner_image/public/waterfront-park-kelowna.jpg?w=400&h=250", link: "https://www.kelowna.ca/parks-recreation/parks-beaches/waterfront-park" },
     
     // Wineries - Kelowna area
@@ -69,13 +235,13 @@ const attractions = {
     antlersBeach: { lat: 49.7397599, lng: -119.764507, name: "Antlers Beach Regional Park", type: "beach", description: "Sandy beach directly across Highway 97 from Hardy Falls with picnic facilities", image: "https://peachland.ca/wp-content/uploads/2019/06/antlers-beach.jpg?w=400&h=250", link: "https://peachland.ca/attractions/beaches/" },
     
     // Summerland area
-    sunOkaBeach: { lat: 49.5833, lng: -119.6667, name: "Sun-Oka Beach Provincial Park", type: "beach", description: "One of Okanagan's finest beaches with excellent swimming and picnic facilities", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/sun_oka/sun-oka-beach.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/sun_oka/" },
+    sunOkaBeach: { lat: 49.5833, lng: -119.6667, name: "Sun-Oka Beach Provincial Park", type: "beach", description: "One of Okanagan's finest beaches with excellent swimming and picnic facilities", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/sun_oka/sun-oka-beach.jpg?w=400&h=250", link: "https://bcparks.ca/sun-oka-beach-park/" },
     giantHeadMountain: { lat: 49.5833, lng: -119.6333, name: "Giant's Head Mountain Park", type: "hiking", description: "Extinct volcano with 360-degree views of Okanagan Valley", image: "https://www.summerland.ca/sites/default/files/styles/header_image/public/giants-head-mountain.jpg?w=400&h=250", link: "https://www.summerland.ca/recreation-culture/parks-trails/giants-head-mountain" },
     
     // Penticton area
     skahaBeach: { lat: 49.4818, lng: -119.5951, name: "Skaha Beach", type: "beach", description: "Canada's top-ranked beach on warm Skaha Lake with sandy shoreline", image: "https://visitpenticton.com/wp-content/uploads/2020/06/skaha-beach-penticton.jpg?w=400&h=250", link: "https://visitpenticton.com/things-to-do/beaches/skaha-beach/" },
     okanaganBeach: { lat: 49.5045, lng: -119.5937, name: "Okanagan Beach", type: "beach", description: "Nearly 1km of premium sandy beach on Okanagan Lake in downtown Penticton", image: "https://visitpenticton.com/wp-content/uploads/2020/06/okanagan-beach-penticton.jpg?w=400&h=250", link: "https://visitpenticton.com/things-to-do/beaches/okanagan-beach/" },
-    skahaBluffs: { lat: 49.4666, lng: -119.5833, name: "Skaha Bluffs Provincial Park", type: "outdoor", description: "Rock climbing paradise with 650+ routes and hiking trails up to 80m high", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/skaha_bl/skaha-bluffs-climbing.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/skaha_bl/" },
+    skahaBluffs: { lat: 49.4666, lng: -119.5833, name: "Skaha Bluffs Provincial Park", type: "outdoor", description: "Rock climbing paradise with 650+ routes and hiking trails up to 80m high", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/skaha_bl/skaha-bluffs-climbing.jpg?w=400&h=250", link: "https://bcparks.ca/skaha-bluffs-park/" },
     munsonMountain: { lat: 49.4833, lng: -119.5333, name: "Munson Mountain", type: "hiking", description: "Popular hike offering epic panoramic views above Penticton", image: "https://cdn2.apstatic.com/photos/hike/7023456_medium_1555439618.jpg?w=400&h=250", link: "https://www.alltrails.com/trail/canada/british-columbia/munson-mountain" },
     
     // Naramata area
@@ -100,8 +266,13 @@ const attractions = {
     kangarooCreekFarm: { lat: 49.968250, lng: -119.370514, name: "Kangaroo Creek Farm", type: "family", description: "Interactive farm experience with kangaroos, lemurs, and other exotic animals located at 5932 Old Vernon Road, Kelowna", image: "https://kangaroocreek.bc.ca/wp-content/uploads/2020/06/kangaroo-creek-farm-animals.jpg?w=400&h=250", link: "https://www.kangaroocreek.bc.ca/" },
     zipzonePeachland: { lat: 49.765598, lng: -119.824009, name: "ZipZone Peachland", type: "family", description: "Canada's highest, longest, and fastest ziplines soaring 381 feet above Peachland Creek Gorge", image: "https://zipzone.ca/wp-content/uploads/2020/04/zipzone-peachland-zipline.jpg?w=400&h=250", link: "https://zipzone.ca/" },
     
+    // U-Pick Fruit Farms
+    kuipersFamilyFruitFarm: { lat: 49.8700, lng: -119.4200, name: "Kuipers Family Fruit Farm", type: "upick", description: "Historic family orchard since 1921 offering u-pick cherries, apricots, peaches and plums with stunning Okanagan Lake views", image: "https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=400&h=250", link: "https://www.facebook.com/kuipersfamilyfruitfarm/" },
+    roseHillOrchard: { lat: 50.1450, lng: -119.3200, name: "Rose Hill Orchard", type: "upick", description: "10-acre mixed fruit orchard and cidery with u-pick cherries, apples, peaches, strawberries and on-site cafe", image: "https://images.unsplash.com/photo-1592419044706-39d57a362a8b?w=400&h=250", link: "https://www.rosehillorchard.com/" },
+    hillsideOrchards: { lat: 49.1650, lng: -119.5400, name: "Hillside Orchards", type: "upick", description: "4th generation sustainable farm with over 30 varieties of u-pick fruits and vegetables, fully non-GMO operation", image: "https://images.unsplash.com/photo-1601004890684-d8cbf643f5f2?w=400&h=250", link: "https://hillsideorchards.ca/" },
+    
     // Provincial Parks along the route
-    bridalVeillFalls: { lat: 49.185301, lng: -121.744080, name: "Bridal Veil Falls Provincial Park", type: "hiking", description: "60-meter waterfall with easy 800m hike, 32 acres of protected parkland east of Chilliwack", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bridal_veil/bridal-veil-falls.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bridal_veil/" },
+    bridalVeillFalls: { lat: 49.185301, lng: -121.744080, name: "Bridal Veil Falls Provincial Park", type: "hiking", description: "60-meter waterfall with easy 800m hike, 32 acres of protected parkland east of Chilliwack", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bridal_veil/bridal-veil-falls.jpg?w=400&h=250", link: "https://bcparks.ca/bridal-veil-falls-park/" },
     harrisonHotSprings: { lat: 49.3000, lng: -121.7758, name: "Harrison Hot Springs", type: "scenic", description: "Resort village with natural hot springs at southern end of Harrison Lake, 90 minutes from Vancouver", image: "https://www.hellobc.com/content/uploads/2019/06/harrison-hot-springs-pool.jpg?w=400&h=250", link: "https://tourismharrison.com/" },
     sasquatchPark: { lat: 49.353657, lng: -121.704150, name: "Sasquatch Provincial Park", type: "outdoor", description: "1,217 hectares touching four beautiful lakes including Harrison Lake, 6km north of Harrison Hot Springs", image: "https://bcparks.ca/wp-content/uploads/2020/03/sasquatch-park-lake.jpg?w=400&h=250", link: "https://bcparks.ca/sasquatch-park/" },
     goldenEarsPark: { lat: 49.3577, lng: -122.5045, name: "Golden Ears Provincial Park", type: "hiking", description: "555.9 sq km park with twin peaks Golden Ears (1,716m), 11km north of Maple Ridge", image: "https://bcparks.ca/wp-content/uploads/2020/03/golden-ears-park-mountain.jpg?w=400&h=250", link: "https://bcparks.ca/golden-ears-park/" },
@@ -120,17 +291,17 @@ const attractions = {
     silverStar: { lat: 50.4166, lng: -119.0333, name: "Silver Star Mountain Resort", type: "outdoor", description: "Year-round resort offering skiing, hiking, and mountain biking", image: "https://skisilverstar.com/wp-content/uploads/2020/02/silver-star-mountain-resort.jpg?w=400&h=250", link: "https://www.skisilverstar.com/" },
     
     // Provincial Parks along the route
-    bridalVeillFalls: { lat: 49.185301, lng: -121.744080, name: "Bridal Veil Falls Provincial Park", type: "hiking", description: "60-meter waterfall accessible via easy 800m hike, 32 acres of protected area", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bridal_veil/bridal-veil-falls.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bridal_veil/" },
+    bridalVeillFalls: { lat: 49.185301, lng: -121.744080, name: "Bridal Veil Falls Provincial Park", type: "hiking", description: "60-meter waterfall accessible via easy 800m hike, 32 acres of protected area", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/bridal_veil/bridal-veil-falls.jpg?w=400&h=250", link: "https://bcparks.ca/bridal-veil-falls-park/" },
     
     harrisonHotSprings: { lat: 49.300000, lng: -121.775800, name: "Harrison Hot Springs", type: "cultural", description: "Natural hot springs resort village 90 minutes east of Vancouver", image: "https://www.harrisonresort.com/wp-content/uploads/2020/03/harrison-hot-springs-resort.jpg?w=400&h=250", link: "https://www.harrisonresort.com/" },
     
-    sasquatchPark: { lat: 49.353657, lng: -121.704150, name: "Sasquatch Provincial Park", type: "hiking", description: "1,217 hectares touching four lakes including Harrison Lake, 6km north of Harrison Hot Springs", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/sasquatch/sasquatch-park.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/sasquatch/" },
+    sasquatchPark: { lat: 49.353657, lng: -121.704150, name: "Sasquatch Provincial Park", type: "hiking", description: "1,217 hectares touching four lakes including Harrison Lake, 6km north of Harrison Hot Springs", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/sasquatch/sasquatch-park.jpg?w=400&h=250", link: "https://bcparks.ca/sasquatch-park/" },
     
-    cultusLake: { lat: 49.053300, lng: -121.986700, name: "Cultus Lake Provincial Park", type: "beach", description: "656 hectares park with warm lake recreation, 11km southwest of Chilliwack", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/cultus_lk/cultus-lake-beach.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/cultus_lk/" },
+    cultusLake: { lat: 49.053300, lng: -121.986700, name: "Cultus Lake Provincial Park", type: "beach", description: "656 hectares park with warm lake recreation, 11km southwest of Chilliwack", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/cultus_lk/cultus-lake-beach.jpg?w=400&h=250", link: "https://bcparks.ca/cultus-lake-park/" },
     
-    cathedralPark: { lat: 49.067700, lng: -120.142000, name: "Cathedral Provincial Park", type: "hiking", description: "33,272 hectares wilderness park named after Cathedral Mountain, 3km west of Keremeos", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/cathedral/cathedral-mountain.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/cathedral/" },
+    cathedralPark: { lat: 49.067700, lng: -120.142000, name: "Cathedral Provincial Park", type: "hiking", description: "33,272 hectares wilderness park named after Cathedral Mountain, 3km west of Keremeos", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/cathedral/cathedral-mountain.jpg?w=400&h=250", link: "https://bcparks.ca/cathedral-park/" },
     
-    manningPark: { lat: 49.061389, lng: -120.787500, name: "E.C. Manning Provincial Park", type: "hiking", description: "70,844 hectares of alpine wilderness on Highway 3, known for wildflower meadows and mountain views", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/ec_manning/manning-park-meadows.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/ec_manning/" },
+    manningPark: { lat: 49.061389, lng: -120.787500, name: "E.C. Manning Provincial Park", type: "hiking", description: "70,844 hectares of alpine wilderness on Highway 3, known for wildflower meadows and mountain views", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/ec_manning/manning-park-meadows.jpg?w=400&h=250", link: "https://bcparks.ca/ec-manning-park/" },
     
     // Highway 3 (Crowsnest) attractions from Osoyoos to Hope
     hopeTownCenter: { lat: 49.384800, lng: -121.438500, name: "Hope Town Center", type: "cultural", description: "Base of operations for adventure, famous as filming location for First Blood (1982)", image: "https://www.crowsnestscenic3.com/wp-content/uploads/2020/06/hope-town.jpg?w=400&h=250", link: "https://www.crowsnestscenic3.com/places/hope/" },
@@ -159,7 +330,7 @@ const attractions = {
     // Highway 3 (Crowsnest) Attractions - Osoyoos to Hope
     hopeDowntown: { lat: 49.384800, lng: -121.438500, name: "Hope Town Center", type: "cultural", description: "Famous as filming location for First Blood (Rambo), chainsaw carving capital with visitor center", image: "https://www.hopetourism.ca/wp-content/uploads/2020/05/hope-town-center.jpg?w=400&h=250", link: "https://www.hopetourism.ca/" },
     
-    lightningLakeTrail: { lat: 49.070000, lng: -120.780000, name: "Lightning Lake Trail", type: "hiking", description: "Popular 2.4km Manning Park trail around alpine lake with Rainbow Bridge and mountain views", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/ec_manning/lightning-lake.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/ec_manning/" },
+    lightningLakeTrail: { lat: 49.070000, lng: -120.780000, name: "Lightning Lake Trail", type: "hiking", description: "Popular 2.4km Manning Park trail around alpine lake with Rainbow Bridge and mountain views", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/ec_manning/lightning-lake.jpg?w=400&h=250", link: "https://bcparks.ca/ec-manning-park/" },
     
     allisonPass: { lat: 49.060000, lng: -120.750000, name: "Allison Pass", type: "scenic", description: "Mountain pass on Highway 3 at 1,342m elevation, spectacular alpine scenery and photo opportunities", image: "https://www.drivebc.ca/wp-content/uploads/2020/07/allison-pass-summit.jpg?w=400&h=250", link: "https://www.drivebc.ca/" },
     
@@ -184,6 +355,56 @@ const attractions = {
     okanaganLavender: { lat: 49.1800, lng: -119.5400, name: "Okanagan Lavender & Herb Farm", type: "scenic", description: "35-acre lavender farm near Oliver with seasonal blooms, products, and scenic views", image: "https://www.okanaganlavender.com/wp-content/uploads/2020/06/lavender-farm-fields.jpg?w=400&h=250", link: "https://www.okanaganlavender.com/" },
     roadside22Winery: { lat: 49.1200, lng: -119.5800, name: "Road 13 Vineyards", type: "wine", description: "Small boutique winery south of Oliver with unique desert-style tasting room", image: "https://road13vineyards.com/wp-content/uploads/2020/05/road13-tasting-room.jpg?w=400&h=250", link: "https://road13vineyards.com/" },
     inkameepDesert: { lat: 49.0500, lng: -119.4000, name: "Inkameep Desert", type: "scenic", description: "Rare pocket desert ecosystem near Osoyoos with unique flora and interpretive trails", image: "https://www.hellobc.com/content/uploads/2019/06/inkameep-desert.jpg?w=400&h=250", link: "https://www.hellobc.com/" }
+};
+
+// 热门餐厅 - 沿线标志性高评分餐厅
+const restaurants = {
+    // Chilliwack area restaurants
+    brooklynPizza: { lat: 49.1625, lng: -121.9513, name: "Brooklyn Pizza", type: "restaurant", description: "Popular local pizzeria known for authentic New York style pizza and friendly atmosphere in Chilliwack", link: "https://www.facebook.com/BrooklynPizzaChilliwack/" },
+    whiteSpotChilliwack: { lat: 49.1580, lng: -121.9480, name: "White Spot Chilliwack", type: "restaurant", description: "Classic Canadian family restaurant famous for Triple O burgers and legendary pies", link: "https://www.whitespot.ca/" },
+    oldEastIndian: { lat: 49.1690, lng: -121.9587, name: "Old East Indian Cuisine", type: "restaurant", description: "Highly rated authentic Indian restaurant with traditional curries and tandoor specialties", link: "https://www.facebook.com/OldEastIndianCuisineChilliwack/" },
+    
+    // Hope area restaurants  
+    homeRestaurantHope: { lat: 49.3800, lng: -121.4400, name: "Home Restaurant & Pie Shop", type: "restaurant", description: "Famous pie shop and family restaurant, Hope's most beloved dining spot since 1940s", link: "https://www.homerestaurant.ca/" },
+    logCabinPub: { lat: 49.3820, lng: -121.4380, name: "Log Cabin Pub", type: "restaurant", description: "Rustic pub with hearty comfort food, steaks and burgers in a cozy log cabin atmosphere", link: "https://www.facebook.com/LogCabiPubHope/" },
+    hopeMountainCentre: { lat: 49.3790, lng: -121.4420, name: "Hope Mountain Centre Cafe", type: "restaurant", description: "Mountain cafe with fresh coffee, homemade soups and sandwiches, popular with hikers and locals", link: "https://www.hopemountaincentre.ca/" },
+    
+    // Merritt area restaurants
+    centralHotelMerritt: { lat: 50.1126, lng: -120.7853, name: "Central Hotel Restaurant", type: "restaurant", description: "Historic hotel restaurant serving steaks, seafood and Canadian classics in downtown Merritt since 1908", link: "https://www.centralhotelmerritt.com/" },
+    collinsBar: { lat: 50.1120, lng: -120.7840, name: "Collins Bar & Grill", type: "restaurant", description: "Popular sports bar and grill with comfort food, wings and local craft beers", link: "https://www.facebook.com/CollinsBarGrill/" },
+    quilchenaHotel: { lat: 50.1100, lng: -120.7900, name: "Quilchena Hotel Restaurant", type: "restaurant", description: "Historic 1908 hotel restaurant with fine dining, steaks and regional cuisine", link: "https://www.quilchenahotel.com/" },
+    
+    // Kamloops area restaurants
+    kekuKamloops: { lat: 50.6745, lng: -120.3273, name: "Kekuli Cafe", type: "restaurant", description: "Indigenous-owned cafe famous for bannock burgers and fry bread, celebrating First Nations cuisine", link: "https://www.kekulicafe.com/" },
+    redCollarBrewing: { lat: 50.6720, lng: -120.3350, name: "Red Collar Brewing", type: "restaurant", description: "Local craft brewery with gastropub menu, wood-fired pizzas and Kamloops-brewed beers", link: "https://www.redcollarbrewing.com/" },
+    theNobleKamloops: { lat: 50.6750, lng: -120.3400, name: "The Noble Pig Brewhouse", type: "restaurant", description: "Award-winning brewpub with craft beers and elevated pub fare, consistently rated best in Kamloops", link: "https://www.noblepigbrewhouse.com/" },
+    helmsKamloops: { lat: 50.6700, lng: -120.3300, name: "Helm's Restaurant", type: "restaurant", description: "Upscale steakhouse and seafood restaurant with extensive wine list and elegant atmosphere", link: "https://www.helmsrestaurant.ca/" },
+    brownsBowl: { lat: 50.6780, lng: -120.3250, name: "Brown's Social House", type: "restaurant", description: "Modern casual dining with creative dishes, craft cocktails and lively social atmosphere", link: "https://www.brownssocialhouse.com/" },
+    
+    // Kelowna area restaurants
+    raudhusKelowna: { lat: 49.8880, lng: -119.4960, name: "Raudz Regional Table", type: "restaurant", description: "Award-winning restaurant showcasing Okanagan ingredients, voted best fine dining in Kelowna", link: "https://www.raudz.com/" },
+    gatherKelowna: { lat: 49.8863, lng: -119.4967, name: "Gather Restaurant", type: "restaurant", description: "Farm-to-table restaurant with seasonal menu, locally-sourced ingredients and creative West Coast cuisine", link: "https://www.gatherkelowna.com/" },
+    kraftyKitchen: { lat: 49.8920, lng: -119.4950, name: "Krafty Kitchen + Bar", type: "restaurant", description: "Contemporary restaurant with innovative comfort food and extensive craft beer selection", link: "https://www.kraftykitchen.ca/" },
+    waterfrontWine: { lat: 49.8958, lng: -119.4958, name: "Waterfront Wine Bar", type: "restaurant", description: "Upscale wine bar and restaurant with lake views, featuring Okanagan wines and farm-to-table cuisine", link: "https://www.waterfrontwines.ca/" },
+    cookKelowna: { lat: 49.8850, lng: -119.4980, name: "COOK Kelowna", type: "restaurant", description: "Modern Canadian cuisine with locally-sourced ingredients, known for innovative seasonal menus", link: "https://www.cookkelowna.com/" },
+    microBar: { lat: 49.8900, lng: -119.4940, name: "Micro Bar + Bites", type: "restaurant", description: "Intimate wine bar with small plates, featuring local wines and artisanal charcuterie", link: "https://www.microbarkelowna.com/" },
+    
+    // Penticton area restaurants
+    theHotel: { lat: 49.4991, lng: -119.5937, name: "The Hotel Penticton Restaurant", type: "restaurant", description: "Historic hotel's upscale restaurant featuring locally-sourced ingredients and extensive wine list", link: "https://www.hotelpenticton.com/" },
+    sageRestaurant: { lat: 49.4980, lng: -119.5920, name: "Sage Restaurant at The Lakeside Resort", type: "restaurant", description: "Fine dining restaurant with lakefront views, featuring contemporary cuisine and Okanagan wines", link: "https://www.lakesideresort.bc.ca/" },
+    olympia: { lat: 49.4970, lng: -119.5950, name: "Olympia Pizza & Spaghetti House", type: "restaurant", description: "Family-owned Italian restaurant serving authentic pizza and pasta since 1960, local institution", link: "https://www.olympiarestaurant.ca/" },
+    whipperSnapper: { lat: 49.4900, lng: -119.5920, name: "Whipper Snapper Distillery", type: "restaurant", description: "Craft distillery with tasting room and restaurant, specializing in spirits and elevated pub fare", link: "https://www.whippersnapperdistillery.com/" },
+    
+    // Oliver area restaurants
+    oliverTwist: { lat: 49.1832, lng: -119.5506, name: "Oliver Twist Restaurant", type: "restaurant", description: "Family restaurant serving hearty Canadian fare and comfort food in downtown Oliver for over 20 years", link: "https://www.facebook.com/OliverTwistRestaurant/" },
+    mainstreetGrill: { lat: 49.1820, lng: -119.5520, name: "Mainstreet Grill", type: "restaurant", description: "Popular local steakhouse known for perfectly grilled steaks, ribs and fresh seafood", link: "https://www.facebook.com/MainstreetGrillOliver/" },
+    oliverEats: { lat: 49.1840, lng: -119.5480, name: "Oliver Eats Cafe", type: "restaurant", description: "Cozy cafe with homemade breakfast and lunch favorites, fresh baking and local coffee", link: "https://www.facebook.com/OliverEatsCafe/" },
+    
+    // Osoyoos area restaurants
+    campo: { lat: 49.0325, lng: -119.4682, name: "Campo Marina Restaurant", type: "restaurant", description: "Lakefront restaurant with patio dining, Italian cuisine, and beautiful views of Osoyoos Lake", link: "https://www.camporestaurant.com/" },
+    nkMipCellarsRestaurant: { lat: 49.0280, lng: -119.4430, name: "Nk'Mip Cellars Restaurant", type: "restaurant", description: "Fine dining at North America's first Indigenous-owned winery, featuring fusion cuisine and wine pairings", link: "https://www.nkmipcellars.com/" },
+    fieldstoneRestaurant: { lat: 49.0300, lng: -119.4650, name: "Fieldstone Fruit Wines Restaurant", type: "restaurant", description: "Unique fruit wine tasting with light meals, featuring wines made from Okanagan fruits", link: "https://www.fieldstonewines.com/" },
+    boatersBeach: { lat: 49.0350, lng: -119.4700, name: "Boaters Beach House", type: "restaurant", description: "Casual lakefront dining with fresh seafood, burgers and cocktails, perfect summer patio", link: "https://www.facebook.com/BoatersBeachHouse/" }
 };
 
 // 主要城镇和地标 (English names for original data storage)
@@ -237,7 +458,9 @@ const customIcons = {
     beach: { icon: '🏖️', color: '#f1c40f', size: 'medium' },
     cultural: { icon: '🏛️', color: '#9b59b6', size: 'medium' },
     family: { icon: '🎠', color: '#e67e22', size: 'medium' },
-    outdoor: { icon: '⛷️', color: '#2c3e50', size: 'medium' }
+    outdoor: { icon: '⛷️', color: '#2c3e50', size: 'medium' },
+    restaurant: { icon: '🍽️', color: '#c0392b', size: 'medium' },
+    upick: { icon: '🍑', color: '#ff6b6b', size: 'medium' }
 };
 
 // 创建自定义标记
@@ -267,6 +490,9 @@ function createCustomMarker(location) {
 
 // 初始化函数
 function initMap() {
+    // 初始化和清理路线缓存
+    routeCache.init();
+    
     // 定义地图边界 (限制在BC省南部和Okanagan地区 - 使用固定的大边界)
     const southWest = L.latLng(47.0, -125.0); // 南西角 (扩大边界)
     const northEast = L.latLng(53.0, -115.0); // 北东角 (扩大边界)
@@ -302,6 +528,12 @@ function showCompleteRoute() {
     // 分别添加不同类型的标记
     addLocationMarkers();
     
+    // 创建驾驶路线
+    createRoute();
+}
+
+// 创建主要驾驶路线（只创建路线，不影响标记）
+function createRoute() {
     // 创建主要驾驶路线（包含酒店和景点）
     const mainRoutePoints = [
         mainLocations.burnaby,
@@ -319,6 +551,19 @@ function showCompleteRoute() {
     
     const waypoints = mainRoutePoints.map(loc => L.latLng(loc.lat, loc.lng));
     
+    // Ensure any existing route control is cleaned up first
+    if (routeControl) {
+        try {
+            map.removeControl(routeControl);
+        } catch (e) {
+            console.warn('Error removing existing route control:', e);
+        }
+        routeControl = null;
+    }
+    
+    // 检查缓存
+    const cachedRoute = routeCache.get(waypoints);
+    
     routeControl = L.Routing.control({
         waypoints: waypoints,
         routeWhileDragging: false,
@@ -333,18 +578,126 @@ function showCompleteRoute() {
             }]
         },
         show: false,
-        fitSelectedRoutes: false
+        fitSelectedRoutes: false,
+        router: L.Routing.osrmv1({
+            serviceUrl: 'https://router.project-osrm.org/route/v1',
+            profile: 'driving',
+            timeout: 10000, // 10秒超时
+            
+            // 自定义路线请求函数，实现缓存和重试逻辑
+            route: function(waypoints, callback, context, options) {
+                // 检查缓存
+                const cached = routeCache.get(waypoints);
+                if (cached) {
+                    setTimeout(() => callback.call(context, null, cached), 0);
+                    return;
+                }
+                
+                // 实现重试逻辑
+                let retryCount = 0;
+                const maxRetries = 3;
+                const retryDelay = 2000; // 2秒延迟
+                
+                const attemptRoute = () => {
+                    // 调用原始OSRM路由器
+                    const originalRouter = L.Routing.osrmv1({
+                        serviceUrl: 'https://router.project-osrm.org/route/v1',
+                        profile: 'driving',
+                        timeout: 10000
+                    });
+                    
+                    originalRouter.route(waypoints, function(error, routes) {
+                        if (error) {
+                            console.warn(`Route attempt ${retryCount + 1} failed:`, error);
+                            
+                            if (retryCount < maxRetries) {
+                                retryCount++;
+                                console.log(`Retrying in ${retryDelay}ms... (attempt ${retryCount}/${maxRetries})`);
+                                setTimeout(attemptRoute, retryDelay);
+                                return;
+                            }
+                            
+                            // 最大重试次数后，使用简单直线连接作为后备方案
+                            console.warn('All routing attempts failed, using fallback route');
+                            const fallbackRoute = createFallbackRoute(waypoints);
+                            callback.call(context, null, [fallbackRoute]);
+                        } else {
+                            // 成功获取路线，存入缓存
+                            if (routes && routes.length > 0) {
+                                routeCache.set(waypoints, routes);
+                            }
+                            callback.call(context, error, routes);
+                        }
+                    }, context, options);
+                };
+                
+                attemptRoute();
+            }
+        })
     }).addTo(map);
     
     // Auto-centering removed - users can manually navigate the map
+}
+
+// 过滤器功能
+function filterMarkers(filterType) {
+    currentFilter = filterType;
+    
+    // 更新按钮状态
+    document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+    document.getElementById(`filter${filterType.charAt(0).toUpperCase() + filterType.slice(1)}`).classList.add('active');
+    
+    // 只更新标记显示，不重新创建路线
+    updateMarkerVisibility();
+}
+
+// 更新标记显示（不重新创建路线）
+function updateMarkerVisibility() {
+    // 清除现有标记
+    clearMarkers();
+    
+    // 重新添加符合过滤条件的标记
+    addLocationMarkers();
+}
+
+// 只清除标记，保留路线
+function clearMarkers() {
+    markers.forEach(marker => {
+        try {
+            if (map && marker) {
+                map.removeLayer(marker);
+            }
+        } catch (e) {
+            console.warn('Error removing marker:', e);
+        }
+    });
+    markers = [];
+}
+
+// 检查标记是否应该显示
+function shouldShowMarker(location) {
+    if (currentFilter === 'all') return true;
+    
+    if (currentFilter === 'dining') {
+        return location.type === 'restaurant' || location.type === 'wine';
+    }
+    
+    if (currentFilter === 'landmarks') {
+        return location.type !== 'restaurant' && location.type !== 'wine';
+    }
+    
+    return true;
 }
 
 // 添加所有位置标记
 function addLocationMarkers() {
     // 添加酒店标记（最突出）
     Object.values(hotels).forEach(location => {
+        if (!shouldShowMarker(location)) return;
+        
         const marker = L.marker([location.lat, location.lng], {
-            icon: createCustomMarker(location)
+            icon: createCustomMarker(location),
+            zIndexOffset: 1000  // Ensure hotels appear on top of all other markers
         }).addTo(map);
         
         const originalName = originalData ? Object.values(originalData.hotels).find(h => h.lat === location.lat && h.lng === location.lng)?.name : null;
@@ -365,8 +718,11 @@ function addLocationMarkers() {
     
     // 添加景点标记
     Object.entries(attractions).forEach(([key, location]) => {
+        if (!shouldShowMarker(location)) return;
+        
         const marker = L.marker([location.lat, location.lng], {
-            icon: createCustomMarker(location)
+            icon: createCustomMarker(location),
+            zIndexOffset: 200  // Attractions appear above restaurants but below main locations
         }).addTo(map);
         
         const originalDescription = originalData ? originalData.attractions[key].description : location.description;
@@ -388,10 +744,42 @@ function addLocationMarkers() {
         markers.push(marker);
     });
     
+    // 添加餐厅标记
+    Object.entries(restaurants).forEach(([key, location]) => {
+        if (!shouldShowMarker(location)) return;
+        
+        const marker = L.marker([location.lat, location.lng], {
+            icon: createCustomMarker(location),
+            zIndexOffset: 100  // Restaurants appear at the bottom of the hierarchy
+        }).addTo(map);
+        
+        const originalName = originalData ? originalData.restaurants?.[key]?.name || location.name : location.name;
+        const accurateImageUrl = getAccurateImageUrl(location, originalName);
+        
+        const originalDescription = originalData && originalData.restaurants ? originalData.restaurants[key].description : location.description;
+        const description = getTranslatedDescription(originalDescription) || getAttractionDescription(location.name);
+        
+        const popupContent = `
+            <div class="popup-content">
+                <h4>${customIcons[location.type].icon} ${location.name}</h4>
+                <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
+                <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
+                <p>${description}</p>
+                ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
+            </div>
+        `;
+        
+        marker.bindPopup(popupContent, { autoPan: false });
+        markers.push(marker);
+    });
+    
     // 添加主要城镇标记
     Object.values(mainLocations).forEach(location => {
+        if (!shouldShowMarker(location)) return;
+        
         const marker = L.marker([location.lat, location.lng], {
-            icon: createCustomMarker(location)
+            icon: createCustomMarker(location),
+            zIndexOffset: 500  // Main locations appear above attractions but below hotels
         }).addTo(map);
         
         const popupContent = `
@@ -418,7 +806,40 @@ function getAttractionDescription(name) {
         "夏山金字塔酒庄": "独特的金字塔建筑酒庄，以有机葡萄酒闻名",
         "斑点湖": "神奇的碱性湖泊，夏季呈现彩色斑点，原住民圣地",
         "Nk'Mip酒庄": "北美首家原住民拥有的酒庄，结合文化体验",
-        "穴居猫头鹰酒庄": "奥利弗地区顶级酒庄，以红酒闻名"
+        "穴居猫头鹰酒庄": "奥利弗地区顶级酒庄，以红酒闻名",
+        
+        // 餐厅描述
+        "布鲁克林披萨": "深受当地人喜爱的披萨店，以正宗纽约风味披萨和友好氛围闻名于奇利瓦克",
+        "白点餐厅奇利瓦克店": "经典加拿大家庭餐厅，以Triple O汉堡和传奇馅饼闻名",
+        "老东印度料理": "备受好评的正宗印度餐厅，传统咖喱和唐杜里烤肉特色菜",
+        "家乡餐厅暨馅饼店": "著名的馅饼店和家庭餐厅，自1940年代以来深受希望镇居民喜爱",
+        "木屋酒吧": "朴实酒吧，舒适美食、牛排和汉堡，原木小屋氛围",
+        "希望山中心咖啡厅": "山区咖啡厅，新鲜咖啡、自制汤品和三明治，徒步者和当地人喜爱",
+        "中心酒店餐厅": "历史悠久的酒店餐厅，自1908年起在梅里特市中心供应牛排、海鲜和加拿大经典菜肴",
+        "柯林斯酒吧烤肉店": "受欢迎的体育酒吧烤肉店，舒适美食、鸡翅和当地精酿啤酒",
+        "奎尔奇纳酒店餐厅": "1908年历史酒店餐厅，高级餐饮、牛排和地方美食",
+        "克库利咖啡馆": "原住民拥有的咖啡馆，以班诺克汉堡和炸面包闻名，弘扬第一民族美食",
+        "红领啤酒厂": "当地精酿啤酒厂，提供美食酒吧菜单、木火披萨和坎卢普斯本地啤酒",
+        "贵族猪酿酒屋": "获奖酿酒酒吧，精酿啤酒和高级酒吧美食，持续被评为坎卢普斯最佳",
+        "赫尔姆餐厅": "高档牛排海鲜餐厅，丰富酒单和优雅氛围",
+        "布朗社交餐厅": "现代休闲餐饮，创意菜肴、手工鸡尾酒和活跃社交氛围",
+        "劳兹地方风味餐厅": "获奖餐厅，展示奥卡纳根本地食材，被评为基洛纳最佳高级餐厅",
+        "聚会餐厅": "农场到餐桌的餐厅，季节性菜单，本地食材和创意西海岸美食",
+        "工艺厨房酒吧": "现代餐厅，创新舒适美食和丰富精酿啤酒选择",
+        "湖滨酒吧": "高档酒吧餐厅，湖景，奥卡纳根葡萄酒和农场到餐桌美食",
+        "库克基洛纳餐厅": "现代加拿大料理，本地食材，以创新季节性菜单闻名",
+        "微型酒吧小食": "私密酒吧，小食，当地葡萄酒和手工熟食",
+        "彭蒂克顿酒店餐厅": "历史酒店的高档餐厅，采用本地食材，提供丰富的葡萄酒单",
+        "湖滨度假村贤哲餐厅": "高级餐厅，湖滨景观，现代料理和奥卡纳根葡萄酒",
+        "奥林匹亚披萨意面屋": "家族经营意大利餐厅，自1960年供应正宗披萨和意面，当地传统",
+        "鞭炮酿酒厂": "精酿酒厂，品酒室和餐厅，专门供应烈酒和高级酒吧美食",
+        "奥利弗扭转餐厅": "家庭餐厅，20多年来在奥利弗市中心供应丰盛的加拿大菜肴和舒适美食",
+        "主街烤肉店": "受欢迎的当地牛排屋，以完美烤制牛排、排骨和新鲜海鲜闻名",
+        "奥利弗美食咖啡厅": "舒适咖啡厅，自制早餐和午餐美食，新鲜烘焙和当地咖啡",
+        "坎波码头餐厅": "湖滨餐厅，露台用餐，意大利美食，奥索尤斯湖美景",
+        "Nk'Mip酒窖餐厅": "北美第一家原住民拥有酒庄的高级餐厅，融合料理和葡萄酒搭配",
+        "田石果酒餐厅": "独特果酒品尝配清淡餐食，采用奥卡纳根水果酿制的葡萄酒",
+        "船民海滨小屋": "休闲湖滨餐厅，新鲜海鲜、汉堡和鸡尾酒，完美夏日露台"
     };
     return descriptions[name] || "热门旅游景点";
 }
@@ -435,7 +856,9 @@ function getTypeDescription(type) {
         waterfront: "Waterfront Area",
         cultural: "Cultural Attraction",
         family: "Family Fun",
-        outdoor: "Outdoor Recreation"
+        outdoor: "Outdoor Recreation",
+        restaurant: "Restaurant & Dining",
+        upick: "U-Pick Fruit Farm"
     };
     return types[type] || "Tourist Attraction";
 }
@@ -445,14 +868,26 @@ function getTypeDescription(type) {
 // 清除地图上的标记和路线
 function clearMap() {
     // 清除标记
-    markers.forEach(marker => map.removeLayer(marker));
+    markers.forEach(marker => {
+        try {
+            if (map && marker) {
+                map.removeLayer(marker);
+            }
+        } catch (e) {
+            console.warn('Error removing marker:', e);
+        }
+    });
     markers = [];
     
     // 清除路线
-    if (routeControl) {
-        map.removeControl(routeControl);
-        routeControl = null;
+    try {
+        if (routeControl && map) {
+            map.removeControl(routeControl);
+        }
+    } catch (e) {
+        console.warn('Error removing route control:', e);
     }
+    routeControl = null;
 }
 
 // 添加地图控件的函数
@@ -523,13 +958,20 @@ if ('IntersectionObserver' in window) {
 // 语言切换功能
 let currentLanguage = 'zh'; // 默认中文
 let originalData = null; // 存储原始英文数据
+let currentFilter = 'all'; // 当前过滤器状态
 
 // 完整的翻译对照表
 const translations = {
     zh: {
         title: '🍷 奥肯纳根旅游指南 🏔️',
-        subtitle: '从本拿比到奥卡纳根湖区 • 热门景点与驾车路线指南',
+        subtitle: '从温哥华到奥肯纳根湖区 • 热门景点与美食指南',
         langBtn: 'EN',
+        // 过滤器翻译
+        filters: {
+            all: '全部',
+            landmarks: '景点',
+            dining: '美食'
+        },
         // 酒店翻译
         hotels: {
             'Delta Hotels Grand Okanagan Resort': '奥卡纳根三角洲豪华度假村',
@@ -584,6 +1026,9 @@ const translations = {
             'Penticton Museum': '彭蒂克顿博物馆',
             'Kangaroo Creek Farm': '袋鼠溪农场',
             'ZipZone Peachland': '桃地镇飞索',
+            'Kuipers Family Fruit Farm': '奎珀斯家庭果园',
+            'Rose Hill Orchard': '玫瑰山果园',
+            'Hillside Orchards': '山坡果园',
             'Bridal Veil Falls Provincial Park': '新娘面纱瀑布省立公园',
             'Harrison Hot Springs': '哈里森温泉',
             'Sasquatch Provincial Park': '野人省立公园',
@@ -618,6 +1063,40 @@ const translations = {
             "Harker's Organic Fruit Ranch": '哈克有机水果农场',
             'Fruitland Produce Stand': '果园农产品摊'
         },
+        // 餐厅翻译
+        restaurants: {
+            'Brooklyn Pizza': '布鲁克林披萨',
+            'White Spot Chilliwack': '白点餐厅奇利瓦克店',
+            'Old East Indian Cuisine': '老东印度料理',
+            'Home Restaurant & Pie Shop': '家乡餐厅暨馅饼店',
+            'Log Cabin Pub': '木屋酒吧',
+            'Hope Mountain Centre Cafe': '希望山中心咖啡厅',
+            'Central Hotel Restaurant': '中心酒店餐厅',
+            'Collins Bar & Grill': '柯林斯酒吧烤肉店',
+            'Quilchena Hotel Restaurant': '奎尔奇纳酒店餐厅',
+            'Kekuli Cafe': '克库利咖啡馆',
+            'Red Collar Brewing': '红领啤酒厂',
+            'The Noble Pig Brewhouse': '贵族猪酿酒屋',
+            "Helm's Restaurant": '赫尔姆餐厅',
+            "Brown's Social House": '布朗社交餐厅',
+            'Raudz Regional Table': '劳兹地方风味餐厅',
+            'Gather Restaurant': '聚会餐厅',
+            'Krafty Kitchen + Bar': '工艺厨房酒吧',
+            'Waterfront Wine Bar': '湖滨酒吧',
+            'COOK Kelowna': '库克基洛纳餐厅',
+            'Micro Bar + Bites': '微型酒吧小食',
+            'The Hotel Penticton Restaurant': '彭蒂克顿酒店餐厅',
+            'Sage Restaurant at The Lakeside Resort': '湖滨度假村贤哲餐厅',
+            'Olympia Pizza & Spaghetti House': '奥林匹亚披萨意面屋',
+            'Whipper Snapper Distillery': '鞭炮酿酒厂',
+            'Oliver Twist Restaurant': '奥利弗扭转餐厅',
+            'Mainstreet Grill': '主街烤肉店',
+            'Oliver Eats Cafe': '奥利弗美食咖啡厅',
+            'Campo Marina Restaurant': '坎波码头餐厅',
+            "Nk'Mip Cellars Restaurant": 'Nk\'Mip酒窖餐厅',
+            'Fieldstone Fruit Wines Restaurant': '田石果酒餐厅',
+            'Boaters Beach House': '船民海滨小屋'
+        },
         // 城市翻译
         cities: {
             'Burnaby': '本拿比',
@@ -642,7 +1121,9 @@ const translations = {
             'Cultural Attraction': '文化景点',
             'Family Fun': '家庭娱乐',
             'Outdoor Recreation': '户外娱乐',
-            'Major Town': '主要城镇'
+            'Restaurant & Dining': '餐厅美食',
+            'Major Town': '主要城镇',
+            'U-Pick Fruit Farm': '自采果园'
         },
         // 景点详细描述翻译
         descriptions: {
@@ -742,13 +1223,58 @@ const translations = {
             'Historic gold rush town ruins near Oliver, interpretive trails and mining history': '奥利弗附近历史淘金镇遗迹，解释步道和采矿历史',
             '35-acre lavender farm near Oliver with seasonal blooms, products, and scenic views': '奥利弗附近35英亩薰衣草农场，季节性花期、产品和风景',
             'Small boutique winery south of Oliver with unique desert-style tasting room': '奥利弗南部小型精品酒庄，独特沙漠风格品酒室',
-            'Rare pocket desert ecosystem near Osoyoos with unique flora and interpretive trails': '奥索尤斯附近罕见袖珍沙漠生态系统，独特植物和解释步道'
+            'Rare pocket desert ecosystem near Osoyoos with unique flora and interpretive trails': '奥索尤斯附近罕见袖珍沙漠生态系统，独特植物和解释步道',
+            
+            // 餐厅英文描述翻译
+            'Popular local pizzeria known for authentic New York style pizza and friendly atmosphere in Chilliwack': '深受当地人喜爱的披萨店，以正宗纽约风味披萨和友好氛围闻名于奇利瓦克',
+            'Classic Canadian family restaurant famous for Triple O burgers and legendary pies': '经典的加拿大家庭餐厅，以Triple O汉堡和传奇馅饼闻名',
+            'Highly rated authentic Indian restaurant with traditional curries and tandoor specialties': '备受好评的正宗印度餐厅，供应传统咖喱和坦都烧烤特色菜',
+            'Famous pie shop and family restaurant, Hope\'s most beloved dining spot since 1940s': '著名的馅饼店和家庭餐厅，自1940年代以来深受希望镇居民喜爱',
+            'Rustic pub with hearty comfort food, steaks and burgers in a cozy log cabin atmosphere': '质朴的酒吧，在舒适的木屋氛围中供应丰盛的舒适食物、牛排和汉堡',
+            'Mountain cafe with fresh coffee, homemade soups and sandwiches, popular with hikers and locals': '山地咖啡馆，供应新鲜咖啡、自制汤品和三明治，深受徒步者和当地人喜爱',
+            'Historic hotel restaurant serving steaks, seafood and Canadian classics in downtown Merritt since 1908': '历史悠久的酒店餐厅，自1908年起在梅里特市中心供应牛排、海鲜和加拿大经典菜肴',
+            'Popular sports bar and grill with comfort food, wings and local craft beers': '受欢迎的体育酒吧烤肉店，供应舒适食物、鸡翅和当地精酿啤酒',
+            'Historic 1908 hotel restaurant with fine dining, steaks and regional cuisine': '历史悠久的1908年酒店餐厅，提供精致餐饮、牛排和地方美食',
+            'Indigenous-owned cafe famous for bannock burgers and fry bread, celebrating First Nations cuisine': '原住民拥有的咖啡馆，以班诺克汉堡和炸面包闻名，弘扬第一民族美食',
+            'Local craft brewery with gastropub menu, wood-fired pizzas and Kamloops-brewed beers': '当地精酿啤酒厂，提供美食酒吧菜单、木火披萨和坎卢普斯本地啤酒',
+            'Award-winning brewpub with craft beers and elevated pub fare, consistently rated best in Kamloops': '获奖的精酿酒吧，供应精酿啤酒和高品质酒吧美食，一直被评为坎卢普斯最佳',
+            'Upscale steakhouse and seafood restaurant with extensive wine list and elegant atmosphere': '高档牛排和海鲜餐厅，拥有丰富的葡萄酒单和优雅的氛围',
+            'Modern casual dining with creative dishes, craft cocktails and lively social atmosphere': '现代休闲餐厅，创意菜肴，手工调酒和活跃的社交氛围',
+            'Award-winning restaurant showcasing Okanagan ingredients, voted best fine dining in Kelowna': '获奖餐厅，展示奥卡纳根本地食材，被评为基洛纳最佳高级餐厅',
+            'Farm-to-table restaurant with seasonal menu, locally-sourced ingredients and creative West Coast cuisine': '农场到餐桌的餐厅，季节性菜单，本地食材和创意西海岸美食',
+            'Contemporary restaurant with innovative comfort food and extensive craft beer selection': '现代餐厅，创新舒适美食和丰富的精酿啤酒选择',
+            'Upscale wine bar and restaurant with lake views, featuring Okanagan wines and farm-to-table cuisine': '高档酒吧餐厅，湖景优美，提供奥卡纳根葡萄酒和农场到餐桌美食',
+            'Modern Canadian cuisine with locally-sourced ingredients, known for innovative seasonal menus': '现代加拿大料理，本地食材，以创新季节性菜单著称',
+            'Intimate wine bar with small plates, featuring local wines and artisanal charcuterie': '温馨酒吧，小食精美，提供本地葡萄酒和手工熟食',
+            'Historic hotel\'s upscale restaurant featuring locally-sourced ingredients and extensive wine list': '历史酒店的高档餐厅，采用本地食材，提供丰富的葡萄酒单',
+            'Fine dining restaurant with lakefront views, featuring contemporary cuisine and Okanagan wines': '高档餐厅，湖滨景观，现代料理和奥卡纳根葡萄酒',
+            'Family-owned Italian restaurant serving authentic pizza and pasta since 1960, local institution': '家族经营的意大利餐厅，自1960年起供应正宗披萨和意面，当地名店',
+            'Craft distillery with tasting room and restaurant, specializing in spirits and elevated pub fare': '精酿酒厂，品酒室和餐厅，专业烈酒和高品质酒吧美食',
+            'Family restaurant serving hearty Canadian fare and comfort food in downtown Oliver for over 20 years': '家庭餐厅，20多年来在奥利弗市中心供应丰盛的加拿大菜肴和舒适美食',
+            'Popular local steakhouse known for perfectly grilled steaks, ribs and fresh seafood': '受欢迎的当地牛排餐厅，以完美烤制的牛排、肋排和新鲜海鲜闻名',
+            'Cozy cafe with homemade breakfast and lunch favorites, fresh baking and local coffee': '温馨咖啡馆，家制早餐和午餐招牌菜，新鲜烘焙和本地咖啡',
+            'Lakefront restaurant with patio dining, Italian cuisine, and beautiful views of Osoyoos Lake': '湖滨餐厅，露台用餐，意大利料理，奥索尤斯湖美景',
+            'Fine dining at North America\'s first Indigenous-owned winery, featuring fusion cuisine and wine pairings': '北美首家原住民酒庄的高级餐厅，融合料理和葡萄酒搭配',
+            'Unique fruit wine tasting with light meals, featuring wines made from Okanagan fruits': '独特果酒品鉴配轻食，采用奥卡纳根水果酿制的葡萄酒',
+            'Casual lakefront dining with fresh seafood, burgers and cocktails, perfect summer patio': '休闲湖滨餐厅，新鲜海鲜、汉堡和调酒，完美的夏日露台',
+            'Lakefront restaurant with patio dining, Italian cuisine, and beautiful views of Osoyoos Lake': '湖滨餐厅，露台用餐，意大利美食，奥索尤斯湖美景',
+            
+            // U-Pick 果园描述翻译
+            'Historic family orchard since 1921 offering u-pick cherries, apricots, peaches and plums with stunning Okanagan Lake views': '历史悠久的家庭果园，自1921年起提供自采樱桃、杏子、桃子和李子，享有奥卡纳根湖壮丽景色',
+            '10-acre mixed fruit orchard and cidery with u-pick cherries, apples, peaches, strawberries and on-site cafe': '10英亩综合果园和苹果酒厂，提供自采樱桃、苹果、桃子、草莓和现场咖啡厅',
+            '4th generation sustainable farm with over 30 varieties of u-pick fruits and vegetables, fully non-GMO operation': '第四代可持续农场，提供30多种自采水果和蔬菜，完全非转基因经营'
         }
     },
     en: {
         title: '🍷 Okanagan Travel Guide 🏔️',
         subtitle: 'From Burnaby to Okanagan Lake • Popular Attractions & Driving Routes',
-        langBtn: '中文'
+        langBtn: '中文',
+        // 过滤器翻译
+        filters: {
+            all: 'All',
+            landmarks: 'Landmarks',
+            dining: 'Dining'
+        }
     }
 };
 
@@ -758,6 +1284,7 @@ function toggleLanguage() {
         originalData = {
             hotels: JSON.parse(JSON.stringify(hotels)),
             attractions: JSON.parse(JSON.stringify(attractions)),
+            restaurants: JSON.parse(JSON.stringify(restaurants)),
             mainLocations: JSON.parse(JSON.stringify(mainLocations))
         };
     }
@@ -772,6 +1299,14 @@ function updatePageElements() {
     document.querySelector('.main-title').textContent = t.title;
     document.querySelector('.subtitle').textContent = t.subtitle;
     document.getElementById('langBtn').innerHTML = `🌐 ${t.langBtn}`;
+    
+    // 更新过滤器按钮文本
+    const filterTexts = document.querySelectorAll('.filter-text');
+    if (filterTexts.length > 0) {
+        filterTexts[0].textContent = t.filters.all;
+        filterTexts[1].textContent = t.filters.landmarks; 
+        filterTexts[2].textContent = t.filters.dining;
+    }
 }
 
 function updateLanguage() {
@@ -807,6 +1342,13 @@ function translateToChineseNames() {
         attraction.name = t.attractions[originalData.attractions[key].name] || attraction.name;
     });
     
+    // 翻译餐厅名称
+    Object.keys(restaurants).forEach(key => {
+        const restaurant = restaurants[key];
+        const originalName = originalData && originalData.restaurants ? originalData.restaurants[key].name : restaurant.name;
+        restaurant.name = t.restaurants[originalName] || restaurant.name;
+    });
+    
     // 翻译城市名称
     Object.keys(mainLocations).forEach(key => {
         const location = mainLocations[key];
@@ -822,6 +1364,12 @@ function restoreOriginalNames() {
     
     Object.keys(attractions).forEach(key => {
         attractions[key].name = originalData.attractions[key].name;
+    });
+    
+    Object.keys(restaurants).forEach(key => {
+        if (originalData && originalData.restaurants && originalData.restaurants[key]) {
+            restaurants[key].name = originalData.restaurants[key].name;
+        }
     });
     
     Object.keys(mainLocations).forEach(key => {
@@ -887,6 +1435,7 @@ document.addEventListener('DOMContentLoaded', function() {
     originalData = {
         hotels: JSON.parse(JSON.stringify(hotels)),
         attractions: JSON.parse(JSON.stringify(attractions)),
+        restaurants: JSON.parse(JSON.stringify(restaurants)),
         mainLocations: JSON.parse(JSON.stringify(mainLocations))
     };
     
