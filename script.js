@@ -28,10 +28,10 @@ const attractions = {
     // Highway 5 (Coquihalla) attractions
     othelloTunnels: { lat: 49.3688, lng: -121.3678, name: "Othello Tunnels", type: "hiking", description: "Historic railway tunnels through dramatic canyon walls, part of Kettle Valley Railway", image: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/coquihalla/othello-tunnels.jpg?w=400&h=250", link: "https://www.env.gov.bc.ca/bcparks/explore/parkpgs/coquihalla/" },
     coquihallaCanyon: { lat: 49.3858, lng: -121.4424, name: "Coquihalla Canyon Provincial Park", type: "hiking", description: "Former Kettle Valley Railway route with tunnels and trestles, spectacular canyon views near Hope", image: "https://bcparks.ca/wp-content/uploads/2020/03/coquihalla-canyon-tunnels.jpg?w=400&h=250", link: "https://bcparks.ca/coquihalla-canyon-park/" },
-    brittonCreekRestArea: { lat: 49.651870, lng: -121.000690, name: "Britton Creek Rest Area", type: "scenic", description: "Highway 5 rest stop with washroom facilities, picnic tables, and mountain views near Coquihalla Summit", image: "https://images.drivebc.ca/bchighwaycam/pub/html/www/images/coquihalla.jpg?w=400&h=250", link: "https://www.th.gov.bc.ca/restareas/" },
-    zopkiosRestArea: { lat: 49.680000, lng: -120.950000, name: "Zopkios Rest Area", type: "scenic", description: "Rest area near Coquihalla Summit with mountain views and hiking opportunities", image: "https://images.drivebc.ca/bchighwaycam/pub/html/www/images/coquihalla-summit.jpg?w=400&h=250", link: "https://www.th.gov.bc.ca/restareas/" },
+    brittonCreekRestArea: { lat: 49.651870, lng: -121.000690, name: "Britton Creek Rest Area", type: "scenic", description: "Highway 5 rest stop with washroom facilities, picnic tables, and mountain views near Coquihalla Summit", image: "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=250", link: "https://www.th.gov.bc.ca/restareas/" },
+    zopkiosRestArea: { lat: 49.680000, lng: -120.950000, name: "Zopkios Rest Area", type: "scenic", description: "Rest area near Coquihalla Summit with mountain views and hiking opportunities", image: "https://images.unsplash.com/photo-1551632811-561732d1e306?w=400&h=250", link: "https://www.th.gov.bc.ca/restareas/" },
     fallsLakeTrail: { lat: 49.620000, lng: -121.020000, name: "Falls Lake Trail", type: "hiking", description: "1.5km alpine lake trail with impressive mountain views, 45km north of Hope near Coquihalla Summit", image: "https://bcparks.ca/wp-content/uploads/2020/03/falls-lake-trail.jpg?w=400&h=250", link: "https://bcparks.ca/falls-lake-recreation-area/" },
-    coquihallaSummit: { lat: 49.685000, lng: -120.940000, name: "Coquihalla Summit", type: "scenic", description: "Highest point on Highway 5 at 1,244m elevation with mountain views and alpine environment", image: "https://images.drivebc.ca/bchighwaycam/pub/html/www/images/coquihalla-pass.jpg?w=400&h=250", link: "https://www.drivebc.ca/" },
+    coquihallaSummit: { lat: 49.685000, lng: -120.940000, name: "Coquihalla Summit", type: "scenic", description: "Highest point on Highway 5 at 1,244m elevation with mountain views and alpine environment", image: "https://images.unsplash.com/photo-1464822759844-d150ad6c0ce8?w=400&h=250", link: "https://www.drivebc.ca/" },
     
     // Highway 5A Merritt to Kamloops attractions
     nicolaLake: { lat: 50.130000, lng: -120.850000, name: "Nicola Lake", type: "scenic", description: "Large scenic lake just outside Merritt with over 20 fish species including Kokanee and Rainbow Trout", image: "https://www.tourismkamloops.com/wp-content/uploads/2020/06/nicola-lake.jpg?w=400&h=250", link: "https://www.tourismkamloops.com/" },
@@ -169,7 +169,7 @@ const attractions = {
     
     keremeosGristMill: { lat: 49.200000, lng: -119.850000, name: "Keremeos Grist Mill", type: "cultural", description: "1877 historic flour mill still operating with original equipment, seasonal demonstrations", image: "https://www.keremeosmill.ca/wp-content/uploads/2020/06/keremeos-grist-mill.jpg?w=400&h=250", link: "https://www.keremeosmill.ca/" },
     
-    orifinoWinery: { lat: 49.180000, lng: -119.800000, name: "Orofino Winery", type: "wine", description: "Canada's first strawbale winery in Cawston, sustainable practices and unique architecture", image: "https://orofinowinery.com/wp-content/uploads/2020/04/orofino-strawbale-winery.jpg?w=400&h=250", link: "https://orofinowinery.com/" },
+    orifinoWinery: { lat: 49.180000, lng: -119.800000, name: "Orofino Winery", type: "wine", description: "Canada's first strawbale winery in Cawston, sustainable practices and unique architecture", image: "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=400&h=250", link: "https://orofinowinery.com/" },
     
     sevenStonesWinery: { lat: 49.190000, lng: -119.820000, name: "Seven Stones Winery", type: "wine", description: "Organic vineyard with scenic mountain views in Cawston Valley, small-batch artisan wines", image: "https://sevenstoneswinery.com/wp-content/uploads/2020/05/seven-stones-vineyard.jpg?w=400&h=250", link: "https://sevenstoneswinery.com/" },
     harkersFruitRanch: { lat: 49.4500, lng: -119.6000, name: "Harker's Organic Fruit Ranch", type: "cultural", description: "Certified organic fruit farm near Cawston with U-pick cherries, apples, and stone fruits", image: "https://www.harkerfruit.com/wp-content/uploads/2020/06/harkers-fruit-ranch.jpg?w=400&h=250", link: "https://www.harkerfruit.com/" },
@@ -460,10 +460,12 @@ function addMapControls() {
         position: 'bottomright'
     }).addTo(map);
     
-    // 添加全屏控件
-    map.addControl(new L.Control.Fullscreen({
-        position: 'topright'
-    }));
+    // 添加全屏控件 - 使用正确的构造方法
+    if (L.control.fullscreen) {
+        L.control.fullscreen({
+            position: 'topright'
+        }).addTo(map);
+    }
 }
 
 // 辅助函数：格式化时间
