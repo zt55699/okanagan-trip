@@ -460,12 +460,8 @@ function addMapControls() {
         position: 'bottomright'
     }).addTo(map);
     
-    // 添加全屏控件 - 使用正确的构造方法
-    if (L.control.fullscreen) {
-        L.control.fullscreen({
-            position: 'topright'
-        }).addTo(map);
-    }
+    // 全屏控件暂时移除以避免加载错误
+    // Note: Fullscreen functionality can be added back when plugin loads properly
 }
 
 // 辅助函数：格式化时间
