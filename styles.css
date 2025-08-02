@@ -443,10 +443,33 @@ body {
 .custom-marker-icon {
     border-radius: 50% !important;
     transition: transform 0.3s ease;
+    /* Hardware acceleration for mobile */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    will-change: transform;
 }
 
 .custom-marker-icon:hover {
     transform: scale(1.1);
+}
+
+/* Disable animations on mobile for better performance */
+@media (max-width: 768px) {
+    .custom-marker-icon {
+        transition: none !important;
+    }
+    
+    .leaflet-marker-icon {
+        transition: none !important;
+    }
+    
+    /* Optimize marker rendering on mobile */
+    .leaflet-marker-pane {
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
+    }
 }
 
 /* 弹出框样式增强 */

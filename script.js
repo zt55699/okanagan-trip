@@ -2,6 +2,11 @@
 let map;
 let routeControl;
 let markers = [];
+let markerClusterGroup = null; // For performance optimization
+
+// Performance optimization flags
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // 路线缓存系统
 const routeCache = {
@@ -464,11 +469,21 @@ const customIcons = {
 };
 
 // 创建自定义标记
+// Cache for marker icons to improve performance
+const markerIconCache = new Map();
+
 function createCustomMarker(location) {
     const iconData = customIcons[location.type] || customIcons.scenic;
+    const cacheKey = `${location.type}-${iconData.size}`;
+    
+    // Return cached icon if available
+    if (markerIconCache.has(cacheKey)) {
+        return markerIconCache.get(cacheKey);
+    }
+    
     const size = iconData.size === 'large' ? [40, 40] : [30, 30];
     
-    return L.divIcon({
+    const icon = L.divIcon({
         html: `<div style="
             background: ${iconData.color};
             color: white;
@@ -479,13 +494,20 @@ function createCustomMarker(location) {
             align-items: center;
             justify-content: center;
             font-size: ${iconData.size === 'large' ? '20px' : '16px'};
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            border: 3px solid white;
+            box-shadow: ${isMobile ? '0 2px 4px rgba(0,0,0,0.2)' : '0 4px 8px rgba(0,0,0,0.3)'};
+            border: ${isMobile ? '2px' : '3px'} solid white;
+            will-change: transform;
+            -webkit-transform: translateZ(0);
+            transform: translateZ(0);
         ">${iconData.icon}</div>`,
         className: 'custom-marker-icon',
         iconSize: size,
         iconAnchor: [size[0]/2, size[1]/2]
     });
+    
+    // Cache the icon
+    markerIconCache.set(cacheKey, icon);
+    return icon;
 }
 
 // 初始化函数
@@ -499,14 +521,27 @@ function initMap() {
     const bounds = L.latLngBounds(southWest, northEast);
     
     // 创建地图 (minZoom: 6 limits scaling to ~100km view, bounds limit panning area)
-    map = L.map('map', {
+    const mapOptions = {
         minZoom: 6,
         maxZoom: 18,
         maxBounds: bounds,
         maxBoundsViscosity: 0.0,
         wheelPxPerZoomLevel: 60,
-        zoomSnap: 0.1
-    }).setView([49.5, -119.5], 7);
+        zoomSnap: 0.1,
+        // Mobile optimizations
+        tap: !isIOS, // Disable tap on iOS to prevent delay
+        tapTolerance: 40,
+        touchZoom: isMobile ? 'center' : true,
+        bounceAtZoomLimits: false,
+        // Performance optimizations
+        zoomAnimation: !isMobile, // Disable zoom animation on mobile
+        fadeAnimation: !isMobile,
+        markerZoomAnimation: !isMobile,
+        preferCanvas: isMobile, // Use canvas renderer on mobile for better performance
+        renderer: isMobile ? L.canvas({ padding: 0.5 }) : L.svg()
+    };
+    
+    map = L.map('map', mapOptions).setView([49.5, -119.5], 7);
     
     // 添加地图图层
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -691,28 +726,43 @@ function shouldShowMarker(location) {
 
 // 添加所有位置标记
 function addLocationMarkers() {
+    // Use layer group for better performance
+    const markerLayer = L.layerGroup();
+    
+    // Batch create all markers first, then add to map at once
+    const markersToAdd = [];
+    
     // 添加酒店标记（最突出）
     Object.values(hotels).forEach(location => {
         if (!shouldShowMarker(location)) return;
         
         const marker = L.marker([location.lat, location.lng], {
             icon: createCustomMarker(location),
-            zIndexOffset: 1000  // Ensure hotels appear on top of all other markers
-        }).addTo(map);
+            zIndexOffset: 1000,  // Ensure hotels appear on top of all other markers
+            // Mobile optimizations
+            riseOnHover: !isMobile,
+            autoPanOnFocus: false
+        });
         
-        const originalName = originalData ? Object.values(originalData.hotels).find(h => h.lat === location.lat && h.lng === location.lng)?.name : null;
-        const accurateImageUrl = getAccurateImageUrl(location, originalName);
-        const popupContent = `
-            <div class="popup-content">
-                <h4>${customIcons[location.type].icon} ${location.name}</h4>
-                <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
-                <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
-                <p>${currentLanguage === 'zh' ? '湖滨豪华度假村，设施齐全，景色优美' : 'Luxury lakefront resort with full amenities and stunning views'}</p>
-                ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
-            </div>
-        `;
+        // Defer popup content creation for better performance
+        marker.on('click', function() {
+            if (!this.getPopup()) {
+                const originalName = originalData ? Object.values(originalData.hotels).find(h => h.lat === location.lat && h.lng === location.lng)?.name : null;
+                const accurateImageUrl = getAccurateImageUrl(location, originalName);
+                const popupContent = `
+                    <div class="popup-content">
+                        <h4>${customIcons[location.type].icon} ${location.name}</h4>
+                        <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
+                        <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
+                        <p>${currentLanguage === 'zh' ? '湖滨豪华度假村，设施齐全，景色优美' : 'Luxury lakefront resort with full amenities and stunning views'}</p>
+                        ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
+                    </div>
+                `;
+                this.bindPopup(popupContent, { autoPan: false }).openPopup();
+            }
+        });
         
-        marker.bindPopup(popupContent, { autoPan: false });
+        markersToAdd.push(marker);
         markers.push(marker);
     });
     
@@ -722,25 +772,34 @@ function addLocationMarkers() {
         
         const marker = L.marker([location.lat, location.lng], {
             icon: createCustomMarker(location),
-            zIndexOffset: 200  // Attractions appear above restaurants but below main locations
-        }).addTo(map);
+            zIndexOffset: 200,  // Attractions appear above restaurants but below main locations
+            riseOnHover: !isMobile,
+            autoPanOnFocus: false
+        });
         
-        const originalDescription = originalData ? originalData.attractions[key].description : location.description;
-        const description = getTranslatedDescription(originalDescription) || getAttractionDescription(location.name);
-        const originalName = originalData ? originalData.attractions[key].name : null;
-        const accurateImageUrl = getAccurateImageUrl(location, originalName);
+        // Defer popup content creation
+        marker.on('click', function() {
+            if (!this.getPopup()) {
+                const originalDescription = originalData ? originalData.attractions[key].description : location.description;
+                const description = getTranslatedDescription(originalDescription) || getAttractionDescription(location.name);
+                const originalName = originalData ? originalData.attractions[key].name : null;
+                const accurateImageUrl = getAccurateImageUrl(location, originalName);
+                
+                const popupContent = `
+                    <div class="popup-content">
+                        <h4>${customIcons[location.type].icon} ${location.name}</h4>
+                        <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
+                        <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
+                        <p>${description}</p>
+                        ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
+                    </div>
+                `;
+                
+                this.bindPopup(popupContent, { autoPan: false }).openPopup();
+            }
+        });
         
-        const popupContent = `
-            <div class="popup-content">
-                <h4>${customIcons[location.type].icon} ${location.name}</h4>
-                <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
-                <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
-                <p>${description}</p>
-                ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
-            </div>
-        `;
-        
-        marker.bindPopup(popupContent, { autoPan: false });
+        markersToAdd.push(marker);
         markers.push(marker);
     });
     
@@ -750,26 +809,35 @@ function addLocationMarkers() {
         
         const marker = L.marker([location.lat, location.lng], {
             icon: createCustomMarker(location),
-            zIndexOffset: 100  // Restaurants appear at the bottom of the hierarchy
-        }).addTo(map);
+            zIndexOffset: 100,  // Restaurants appear at the bottom of the hierarchy
+            riseOnHover: !isMobile,
+            autoPanOnFocus: false
+        });
         
-        const originalName = originalData ? originalData.restaurants?.[key]?.name || location.name : location.name;
-        const accurateImageUrl = getAccurateImageUrl(location, originalName);
+        // Defer popup content creation
+        marker.on('click', function() {
+            if (!this.getPopup()) {
+                const originalName = originalData ? originalData.restaurants?.[key]?.name || location.name : location.name;
+                const accurateImageUrl = getAccurateImageUrl(location, originalName);
+                
+                const originalDescription = originalData && originalData.restaurants ? originalData.restaurants[key].description : location.description;
+                const description = getTranslatedDescription(originalDescription) || getAttractionDescription(location.name);
+                
+                const popupContent = `
+                    <div class="popup-content">
+                        <h4>${customIcons[location.type].icon} ${location.name}</h4>
+                        <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
+                        <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
+                        <p>${description}</p>
+                        ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
+                    </div>
+                `;
+                
+                this.bindPopup(popupContent, { autoPan: false }).openPopup();
+            }
+        });
         
-        const originalDescription = originalData && originalData.restaurants ? originalData.restaurants[key].description : location.description;
-        const description = getTranslatedDescription(originalDescription) || getAttractionDescription(location.name);
-        
-        const popupContent = `
-            <div class="popup-content">
-                <h4>${customIcons[location.type].icon} ${location.name}</h4>
-                <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
-                <img src="${accurateImageUrl}" alt="${location.name}" style="width:100%; max-width:300px; height:150px; object-fit:cover; border-radius:6px; margin:8px 0;" loading="lazy">
-                <p>${description}</p>
-                ${location.link ? `<a href="${location.link}" target="_blank" class="external-link">📍 ${currentLanguage === 'zh' ? '更多详情' : 'More Details'}</a>` : ''}
-            </div>
-        `;
-        
-        marker.bindPopup(popupContent, { autoPan: false });
+        markersToAdd.push(marker);
         markers.push(marker);
     });
     
@@ -779,20 +847,46 @@ function addLocationMarkers() {
         
         const marker = L.marker([location.lat, location.lng], {
             icon: createCustomMarker(location),
-            zIndexOffset: 500  // Main locations appear above attractions but below hotels
-        }).addTo(map);
+            zIndexOffset: 500,  // Main locations appear above attractions but below hotels
+            riseOnHover: !isMobile,
+            autoPanOnFocus: false
+        });
         
-        const popupContent = `
-            <div class="popup-content">
-                <h4>${customIcons[location.type].icon} ${location.name}</h4>
-                <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
-                <p>${currentLanguage === 'zh' ? '奥卡纳根路线上的重要站点' : 'Key stop along the Okanagan route'}</p>
-            </div>
-        `;
+        // Defer popup content creation
+        marker.on('click', function() {
+            if (!this.getPopup()) {
+                const popupContent = `
+                    <div class="popup-content">
+                        <h4>${customIcons[location.type].icon} ${location.name}</h4>
+                        <p><strong>${getTranslatedTypeDescription(location.type)}</strong></p>
+                        <p>${currentLanguage === 'zh' ? '奥卡纳根路线上的重要站点' : 'Key stop along the Okanagan route'}</p>
+                    </div>
+                `;
+                
+                this.bindPopup(popupContent, { autoPan: false }).openPopup();
+            }
+        });
         
-        marker.bindPopup(popupContent, { autoPan: false });
+        markersToAdd.push(marker);
         markers.push(marker);
     });
+    
+    // Add all markers to map at once for better performance
+    if (isMobile) {
+        // On mobile, use requestAnimationFrame for smoother rendering
+        requestAnimationFrame(() => {
+            markersToAdd.forEach(marker => {
+                markerLayer.addLayer(marker);
+            });
+            markerLayer.addTo(map);
+        });
+    } else {
+        // On desktop, add directly
+        markersToAdd.forEach(marker => {
+            markerLayer.addLayer(marker);
+        });
+        markerLayer.addTo(map);
+    }
 }
 
 // 获取景点描述
