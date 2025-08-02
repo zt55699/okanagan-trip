@@ -455,6 +455,60 @@ body {
     transform: scale(1.1);
 }
 
+/* User Location Marker */
+.custom-location-marker {
+    background: transparent !important;
+    border: none !important;
+}
+
+.location-marker {
+    position: relative;
+    width: 20px;
+    height: 20px;
+}
+
+.location-marker-inner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 12px;
+    height: 12px;
+    background: #007AFF;
+    border: 2px solid white;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 122, 255, 0.4);
+    z-index: 2;
+}
+
+.location-marker-pulse {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px;
+    height: 20px;
+    background: rgba(0, 122, 255, 0.3);
+    border-radius: 50%;
+    animation: location-pulse 2s infinite;
+    z-index: 1;
+}
+
+@keyframes location-pulse {
+    0% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(0.8);
+    }
+    50% {
+        opacity: 0.4;
+        transform: translate(-50%, -50%) scale(1.2);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(1.5);
+    }
+}
+
 /* Disable animations on mobile for better performance */
 @media (max-width: 768px) {
     .custom-marker-icon {
@@ -469,6 +523,11 @@ body {
     .leaflet-marker-pane {
         -webkit-transform: translateZ(0);
         transform: translateZ(0);
+    }
+    
+    /* Reduce location pulse animation on mobile */
+    .location-marker-pulse {
+        animation-duration: 3s;
     }
 }
 

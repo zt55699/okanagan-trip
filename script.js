@@ -3,6 +3,10 @@ let map;
 let routeControl;
 let markers = [];
 let markerClusterGroup = null; // For performance optimization
+let locationMarker = null; // User location marker
+let locationCircle = null; // Accuracy circle
+let watchId = null; // Geolocation watch ID
+let isLocationEnabled = false;
 
 // Performance optimization flags
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -1523,6 +1527,105 @@ function getAccurateImageUrl(location, originalName = null) {
     return `https://tse1.mm.bing.net/th?q=${encodedSearch}&w=400&h=250&c=7&rs=1&o=5&pid=1.7`;
 }
 
+// Location tracking functions
+function startLocationTracking() {
+    if (!navigator.geolocation) {
+        console.log('Geolocation not supported');
+        return;
+    }
+
+    const options = {
+        enableHighAccuracy: true,
+        timeout: isIOS ? 10000 : 5000, // Longer timeout for iOS
+        maximumAge: 0
+    };
+
+    // Start watching location
+    watchLocation(options);
+}
+
+function watchLocation(options) {
+    watchId = navigator.geolocation.watchPosition(
+        onLocationSuccess,
+        onLocationError,
+        options
+    );
+}
+
+function onLocationSuccess(position) {
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+    const accuracy = position.coords.accuracy;
+
+    isLocationEnabled = true;
+
+    // Create or update location marker
+    if (!locationMarker) {
+        // Create custom location icon
+        const locationIcon = L.divIcon({
+            html: `
+                <div class="location-marker">
+                    <div class="location-marker-inner"></div>
+                    <div class="location-marker-pulse"></div>
+                </div>
+            `,
+            className: 'custom-location-marker',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        });
+
+        locationMarker = L.marker([lat, lng], {
+            icon: locationIcon,
+            zIndexOffset: 2000 // Above all other markers
+        }).addTo(map);
+
+        // Create accuracy circle
+        locationCircle = L.circle([lat, lng], {
+            radius: accuracy,
+            color: '#007AFF',
+            fillColor: '#007AFF',
+            fillOpacity: 0.1,
+            weight: 2,
+            opacity: 0.5,
+            interactive: false
+        }).addTo(map);
+
+        // Don't pan to location automatically, let user explore the map
+    } else {
+        // Update existing marker and circle smoothly
+        locationMarker.setLatLng([lat, lng]);
+        locationCircle.setLatLng([lat, lng]);
+        locationCircle.setRadius(accuracy);
+    }
+}
+
+function onLocationError(error) {
+    // Silently handle location errors, don't alert user
+    console.log('Location error:', error.message);
+    
+    // Don't show intrusive alerts, user might have denied permission intentionally
+    isLocationEnabled = false;
+}
+
+function stopLocationTracking() {
+    if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }
+
+    if (locationMarker) {
+        map.removeLayer(locationMarker);
+        locationMarker = null;
+    }
+
+    if (locationCircle) {
+        map.removeLayer(locationCircle);
+        locationCircle = null;
+    }
+
+    isLocationEnabled = false;
+}
+
 // 页面加载时立即初始化为中文
 document.addEventListener('DOMContentLoaded', function() {
     // 立即保存原始英文数据
@@ -1539,4 +1642,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 然后初始化地图
     initMap();
+    
+    // Start location tracking automatically (user will get system prompt)
+    startLocationTracking();
 });
